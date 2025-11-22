@@ -1,0 +1,607 @@
+1. Architecture recap (with Mongo)
+
+Pieces:
+
+Next.js app
+
+UI (workflow canvas + preview + chat)
+
+REST APIs + WebSocket endpoint
+
+LangGraph worker (Node/TS)
+
+Runs the project graph (plan scenes → generate Manim code → render → combine)
+
+Uses OpenAI for planning/codegen/“thoughts”
+
+Uses MongoDB for persistence
+
+Calls Manim + ffmpeg via child processes or a small Python helper
+
+MongoDB
+
+Collections: projects, scenes, chatMessages (and optionally runs)
+
+Stores workflow graph JSON inside projects.workflow
+
+File storage (MVP)
+
+Local paths like ./storage/projects/<projectId>/scene_0.mp4
+
+Served through a simple Next.js route /media/...
+
+WebSockets
+
+Channel: /api/ws?projectId=<id>
+
+Backend broadcasts workflow_update, project_update, scene_update, chat_message events to connected clients.
+
+Everything we already designed still applies; only the ** persistence layer** changes.
+
+2. MongoDB Data Model
+
+You can use Mongoose or the official Mongo driver; I’ll assume Mongoose-style schemas to make it concrete.
+
+2.1 Project document
+
+Collection: projects
+
+Each project = one autonomous agent run.
+
+// types/project.ts
+import { Schema, model, Types } from "mongoose";
+
+export type WorkflowNodeStatus = "pending" | "running" | "complete" | "error";
+
+export interface WorkflowNode {
+  id: string;
+  type: "Input" | "Scene" | "Combine" | "Export";
+  label: string;
+  status: WorkflowNodeStatus;
+  meta?: {
+    sceneId?: string;
+    clipUrl?: string;
+    description?: string;
+    error?: string;
+  };
+  position?: { x: number; y: number };
+}
+
+export interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+}
+
+export interface Workflow {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}
+
+export interface ProjectDoc {
+  _id: Types.ObjectId;
+  title?: string;
+  userPrompt: string;
+  status:
+    | "creating"
+    | "planning"
+    | "generating_scenes"
+    | "combining"
+    | "ready"
+    | "error";
+  targetDurationSeconds: number;
+  workflow: Workflow;
+  finalVideoUrl?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+
+Mongoose schema:
+
+const WorkflowNodeSchema = new Schema<WorkflowNode>(
+  {
+    id: String,
+    type: String,
+    label: String,
+    status: String,
+    meta: Schema.Types.Mixed,
+    position: {
+      x: Number,
+      y: Number
+    }
+  },
+  { _id: false }
+);
+
+const WorkflowEdgeSchema = new Schema<WorkflowEdge>(
+  {
+    id: String,
+    source: String,
+    target: String
+  },
+  { _id: false }
+);
+
+const WorkflowSchema = new Schema<Workflow>(
+  {
+    nodes: [WorkflowNodeSchema],
+    edges: [WorkflowEdgeSchema]
+  },
+  { _id: false }
+);
+
+const ProjectSchema = new Schema<ProjectDoc>(
+  {
+    title: String,
+    userPrompt: { type: String, required: true },
+    status: {
+      type: String,
+      default: "creating"
+    },
+    targetDurationSeconds: Number,
+    workflow: {
+      type: WorkflowSchema,
+      default: { nodes: [], edges: [] }
+    },
+    finalVideoUrl: String
+  },
+  { timestamps: true }
+);
+
+export const ProjectModel = model<ProjectDoc>("Project", ProjectSchema);
+
+2.2 Scene document
+
+Collection: scenes.
+
+// types/scene.ts
+export interface SceneDoc {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+
+  indexInProject: number;
+  title: string;
+
+  status: "planned" | "code_generating" | "rendering" | "ready" | "error";
+
+  durationSeconds?: number;
+  previewVideoUrl?: string;
+  thumbnailUrl?: string;
+
+  manimCode?: string;
+  spec?: any;
+  errorMessage?: string;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+
+Schema:
+
+const SceneSchema = new Schema<SceneDoc>(
+  {
+    projectId: { type: Schema.Types.ObjectId, ref: "Project", index: true },
+    indexInProject: Number,
+    title: String,
+    status: String,
+    durationSeconds: Number,
+    previewVideoUrl: String,
+    thumbnailUrl: String,
+    manimCode: String,
+    spec: Schema.Types.Mixed,
+    errorMessage: String
+  },
+  { timestamps: true }
+);
+
+SceneSchema.index({ projectId: 1, indexInProject: 1 }, { unique: true });
+
+export const SceneModel = model<SceneDoc>("Scene", SceneSchema);
+
+2.3 Chat messages
+
+Collection: chatMessages
+
+// types/chatMessage.ts
+export interface ChatMessageDoc {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: Date;
+}
+
+
+Schema:
+
+const ChatMessageSchema = new Schema<ChatMessageDoc>(
+  {
+    projectId: { type: Schema.Types.ObjectId, ref: "Project", index: true },
+    role: String,
+    content: String
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+
+export const ChatMessageModel = model<ChatMessageDoc>(
+  "ChatMessage",
+  ChatMessageSchema
+);
+
+3. DB Helper Layer (used by LangGraph + API + WS)
+
+Create a small data layer so your LangGraph nodes don’t touch Mongoose directly everywhere.
+
+// lib/db/projects.ts
+import { ProjectModel, ProjectDoc, Workflow } from "@/types/project";
+import { Types } from "mongoose";
+
+export async function createProject(params: {
+  userPrompt: string;
+  targetDurationSeconds: number;
+}): Promise<ProjectDoc> {
+  const project = new ProjectModel({
+    userPrompt: params.userPrompt,
+    targetDurationSeconds: params.targetDurationSeconds,
+    status: "creating"
+  });
+  await project.save();
+  return project;
+}
+
+export async function updateProjectStatus(
+  projectId: Types.ObjectId,
+  status: ProjectDoc["status"],
+  extra: Partial<ProjectDoc> = {}
+) {
+  return ProjectModel.findByIdAndUpdate(
+    projectId,
+    { status, ...extra },
+    { new: true }
+  ).lean();
+}
+
+export async function updateProjectWorkflow(
+  projectId: Types.ObjectId,
+  workflow: Workflow
+) {
+  return ProjectModel.findByIdAndUpdate(
+    projectId,
+    { workflow },
+    { new: true }
+  ).lean();
+}
+
+
+Scenes:
+
+// lib/db/scenes.ts
+import { SceneModel, SceneDoc } from "@/types/scene";
+import { Types } from "mongoose";
+
+export async function createScene(params: {
+  projectId: Types.ObjectId;
+  indexInProject: number;
+  title: string;
+  spec?: any;
+}): Promise<SceneDoc> {
+  const scene = new SceneModel({
+    projectId: params.projectId,
+    indexInProject: params.indexInProject,
+    title: params.title,
+    status: "planned",
+    spec: params.spec
+  });
+  await scene.save();
+  return scene;
+}
+
+export async function updateScene(
+  sceneId: Types.ObjectId,
+  patch: Partial<SceneDoc>
+) {
+  return SceneModel.findByIdAndUpdate(sceneId, patch, { new: true }).lean();
+}
+
+export async function findScenesForProject(projectId: Types.ObjectId) {
+  return SceneModel.find({ projectId }).sort({ indexInProject: 1 }).lean();
+}
+
+
+Chat:
+
+// lib/db/chat.ts
+import { ChatMessageModel, ChatMessageDoc } from "@/types/chatMessage";
+import { Types } from "mongoose";
+
+export async function addChatMessage(params: {
+  projectId: Types.ObjectId;
+  role: ChatMessageDoc["role"];
+  content: string;
+}) {
+  const msg = new ChatMessageModel(params);
+  await msg.save();
+  return msg.toObject();
+}
+
+export async function getChatMessages(projectId: Types.ObjectId) {
+  return ChatMessageModel.find({ projectId })
+    .sort({ createdAt: 1 })
+    .lean();
+}
+
+4. LangGraph Integration with Mongo
+4.1 State type (same idea as before)
+
+You can keep the same state shape, but use string for IDs (Mongo _id as hex string):
+
+type SceneSpec = {
+  id: string;          // scene _id (string)
+  index: number;
+  title: string;
+  description: string;
+  targetDuration: number;
+};
+
+type ProjectState = {
+  projectId: string;   // project _id (string)
+  userPrompt: string;
+  targetDurationSeconds: number;
+
+  scenes: SceneSpec[];
+  currentSceneIndex: number;
+
+  workflow: Workflow;
+  combinedVideoUrl?: string;
+
+  status: string;
+  error?: string;
+};
+
+
+Internally, when calling DB helpers, convert string → new Types.ObjectId(projectId).
+
+4.2 init_project node with Mongo
+import { createProject, updateProjectWorkflow } from "@/lib/db/projects";
+import { events } from "@/lib/events"; // your ws broadcaster
+
+export async function init_project(
+  state: ProjectState
+): Promise<ProjectState> {
+  const project = await createProject({
+    userPrompt: state.userPrompt,
+    targetDurationSeconds: state.targetDurationSeconds
+  });
+
+  const workflow: Workflow = {
+    nodes: [
+      {
+        id: "input",
+        type: "Input",
+        label: "User Prompt",
+        status: "complete",
+        position: { x: 0, y: 0 },
+        meta: { description: project.userPrompt }
+      },
+      {
+        id: "combine",
+        type: "Combine",
+        label: "Combine Scenes",
+        status: "pending",
+        position: { x: 600, y: 0 }
+      }
+    ],
+    edges: []
+  };
+
+  const updated = await updateProjectWorkflow(project._id, workflow);
+  await events.broadcastWorkflow(project._id.toString(), workflow);
+  await events.broadcastProjectUpdate(project._id.toString(), {
+    status: updated?.status ?? "planning"
+  });
+
+  return {
+    ...state,
+    projectId: project._id.toString(),
+    workflow,
+    status: "planning"
+  };
+}
+
+4.3 plan_scenes node with Mongo
+
+Same logic as before, just using Mongo helpers:
+
+import { createScene } from "@/lib/db/scenes";
+
+export async function plan_scenes(
+  state: ProjectState
+): Promise<ProjectState> {
+  const projectObjectId = new Types.ObjectId(state.projectId);
+
+  const plannedScenes = await callOpenAIForScenePlan(
+    state.userPrompt,
+    state.targetDurationSeconds
+  );
+
+  const sceneSpecs: SceneSpec[] = [];
+  let workflow = { ...state.workflow };
+
+  for (const s of plannedScenes) {
+    const sceneDoc = await createScene({
+      projectId: projectObjectId,
+      indexInProject: s.index,
+      title: s.title,
+      spec: s
+    });
+
+    const nodeId = `scene-${s.index}`;
+
+    workflow.nodes.push({
+      id: nodeId,
+      type: "Scene",
+      label: s.title,
+      status: "pending",
+      position: { x: 300, y: s.index * 120 },
+      meta: {
+        sceneId: sceneDoc._id.toString(),
+        description: s.description
+      }
+    });
+    workflow.edges.push(
+      { id: `e-input-${nodeId}`, source: "input", target: nodeId },
+      { id: `e-${nodeId}-combine`, source: nodeId, target: "combine" }
+    );
+
+    sceneSpecs.push({
+      id: sceneDoc._id.toString(),
+      index: s.index,
+      title: s.title,
+      description: s.description,
+      targetDuration: s.targetDuration
+    });
+  }
+
+  await updateProjectWorkflow(projectObjectId, workflow);
+  await events.broadcastWorkflow(state.projectId, workflow);
+
+  return {
+    ...state,
+    scenes: sceneSpecs,
+    workflow,
+    status: "generating_scenes",
+    currentSceneIndex: 0
+  };
+}
+
+4.4 Scene generation + rendering nodes
+
+All the logic from the previous spec stays the same:
+
+plan_single_scene → LLM spec → save in SceneModel
+
+generate_manim_code → LLM code → save manimCode in SceneModel
+
+render_scene_tool_node → run Manim → update previewVideoUrl, thumbnailUrl, durationSeconds via updateScene
+
+update_scene_node → update workflow node status + meta.clipUrl
+
+Each time a node updates:
+
+Call the relevant Mongo helper (updateScene, updateProjectWorkflow, etc.).
+
+Call events.broadcastSceneUpdate(projectId, scene) or broadcastWorkflow.
+
+5. WebSockets & Next.js with Mongo
+5.1 WebSocket server stays the same conceptually
+
+Connection URL: /api/ws?projectId=<id>
+
+On connection, store socket in an in-memory map keyed by projectId.
+
+events helper exposes:
+
+// lib/events.ts
+const socketsByProject = new Map<string, Set<WebSocket>>();
+
+export function registerSocket(projectId: string, ws: WebSocket) { ... }
+
+export async function broadcastWorkflow(projectId: string, workflow: Workflow) {
+  const payload = JSON.stringify({
+    type: "workflow_update",
+    projectId,
+    workflow
+  });
+  for (const ws of socketsByProject.get(projectId) ?? []) {
+    ws.send(payload);
+  }
+}
+
+export async function broadcastSceneUpdate(
+  projectId: string,
+  scene: SceneSummary
+) { ... }
+
+export async function broadcastProjectUpdate(
+  projectId: string,
+  patch: { status?: string; finalVideoUrl?: string }
+) { ... }
+
+export async function broadcastChatMessage(
+  projectId: string,
+  message: ChatMessageOut
+) { ... }
+
+
+The only Mongo-specific part is how you build the scene / workflow objects before broadcasting (using your models/helpers).
+
+5.2 API routes in Next.js using Mongo
+
+Create project + start graph: POST /api/projects
+
+export async function POST(req: NextRequest) {
+  const { prompt, targetDurationSeconds } = await req.json();
+
+  // create initial project doc (status = 'creating')
+  const project = await createProject({
+    userPrompt: prompt,
+    targetDurationSeconds
+  });
+
+  // kick off LangGraph run (passing initial ProjectState)
+  startGraphRun({
+    projectId: project._id.toString(),
+    userPrompt: prompt,
+    targetDurationSeconds
+  });
+
+  return NextResponse.json({
+    projectId: project._id.toString(),
+    status: project.status
+  });
+}
+
+
+Get project details: GET /api/projects/[id]
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const project = await ProjectModel.findById(params.id).lean();
+  const scenes = await SceneModel.find({ projectId: params.id })
+    .sort({ indexInProject: 1 })
+    .lean();
+  const chat = await getChatMessages(new Types.ObjectId(params.id));
+
+  return NextResponse.json({
+    project,
+    workflow: project.workflow,
+    scenes,
+    chat
+  });
+}
+
+
+The frontend code from the previous answer works the same; it doesn’t care whether your data came from SQL or Mongo.
+
+6. Summary: what actually changed for Mongo
+
+Relational tables → document collections
+
+projects with embedded workflow
+
+scenes with projectId as a foreign key
+
+chatMessages with projectId
+
+State + graph logic stayed the same.
+LangGraph still uses the same ProjectState.
+
+DB helpers now use Mongoose/Mongo instead of SQL:
+
+createProject, updateProjectWorkflow, createScene, updateScene, addChatMessage, etc.
+
+WebSockets & Next.js UI are unchanged except that they call these helpers instead of SQL.
