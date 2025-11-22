@@ -219,21 +219,7 @@ cursor-for-video/
 - Progress updates appear in real-time via WebSocket
 - Consider using `sora-2` model for faster results (vs `sora-2-pro`)
 
-## 📝 License
-
-[Add your license here]
-
-## 🤝 Contributing
-
-[Add contribution guidelines here]
-
-## 🙏 Acknowledgments
-
-- OpenAI for Sora video generation API
-- LangChain team for the LangGraph framework
-- The open-source community for the amazing tools that made this possible
-
 ---
 
-**Built with ❤️ using AI to make video creation accessible to everyone.**
+**Built by Deepak Joshi with ❤️ using AI to make video creation accessible to everyone.**
 
