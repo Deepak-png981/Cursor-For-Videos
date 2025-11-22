@@ -39,7 +39,7 @@ export default function ProjectWizard() {
           Cursor Video Platform
         </h1>
         <p className="text-muted-foreground text-lg">
-          Turn your ideas into educational videos with AI-powered Manim animations.
+          Turn your ideas into educational videos with AI-powered Gemini video generation.
         </p>
       </div>
       

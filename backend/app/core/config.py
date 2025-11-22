@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     MONGODB_URL: str = "mongodb://localhost:27017"
     DATABASE_NAME: str = "cursor_video"
     OPENAI_API_KEY: str
+    OPENAI_VIDEO_MODEL: str = "sora-2"
     STORAGE_DIR: str = "storage"
 
     class Config:

@@ -8,12 +8,11 @@ class SceneState(TypedDict, total=False):
     title: str
     description: str
     visual_plan: Optional[str]
+    voiceover: Optional[str]
     image_prompt: Optional[str]
-    image_path: Optional[str]
-    code: Optional[str]
     video_url: Optional[str]
+    target_duration_seconds: Optional[float]
     status: str
-    # Add retry tracking
     retry_count: int
     last_error: Optional[str]
 

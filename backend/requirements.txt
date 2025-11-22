@@ -3,10 +3,10 @@ uvicorn
 langgraph
 langchain-openai
 motor
-manim
 pydantic
 python-dotenv
 websockets
 pydantic-settings
 httpx
 aiofiles
+openai

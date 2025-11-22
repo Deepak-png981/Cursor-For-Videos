@@ -13,11 +13,11 @@ import { Separator } from '@/components/ui/separator';
 import { Loader2 } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, string> = {
-  'creating': 'Initializing',
-  'planning': 'Planning Scenes',
-  'generating_scenes': 'Generating Scenes',
-  'ready': 'Ready',
-  'error': 'Error',
+  creating: 'Initializing',
+  planning: 'Planning Scenes',
+  generating_scenes: 'Generating Scenes',
+  ready: 'Ready',
+  error: 'Error',
 };
 
 export default function ProjectWorkspace() {
@@ -106,17 +106,24 @@ export default function ProjectWorkspace() {
                             <div className={`absolute left-[11px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 border-white shadow-sm z-10 transition-colors ${
                                 s.status === 'ready' ? 'bg-green-500' : 
                                 s.status === 'error' ? 'bg-red-500' : 
-                                s.status === 'code_generating' || s.status === 'rendering' ? 'bg-blue-500 animate-pulse' : 'bg-gray-300'
+                                s.status === 'rendering' || s.status === 'code_generating' || s.status === 'generating_assets'
+                                  ? 'bg-blue-500 animate-pulse'
+                                  : 'bg-gray-300'
                             }`} />
                             
                             <div className="text-sm p-3 bg-white border rounded-lg shadow-sm hover:shadow-md transition-all group-hover:border-blue-200">
                                 <div className="flex justify-between items-start mb-1">
                                     <span className="font-medium truncate text-foreground">{s.index + 1}. {s.title}</span>
                                     <Badge variant="outline" className="text-[10px] h-5 px-1.5 uppercase">
-                                        {s.status === 'code_generating' ? 'Scripting' : s.status}
+                                        {s.status === 'rendering' ? 'Generating' : s.status}
                                     </Badge>
                                 </div>
                                 <p className="text-xs text-muted-foreground line-clamp-2">{s.description}</p>
+                                {(s.status === 'rendering' || s.status === 'generating_assets') && s.progress_message && (
+                                    <div className="mt-2 text-[10px] text-blue-600 animate-pulse font-medium bg-blue-50 px-2 py-1 rounded">
+                                        {s.progress_message}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))}

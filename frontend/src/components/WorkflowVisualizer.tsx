@@ -21,21 +21,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, CheckCircle, XCircle, PlayCircle, GripVertical, Image as ImageIcon } from 'lucide-react';
 
 const STATUS_LABELS: Record<string, string> = {
-  'planned': 'Planned',
-  'generating_assets': 'Creating Assets',
-  'code_generating': 'Writing Script',
-  'rendering': 'Animating',
-  'ready': 'Ready',
-  'error': 'Failed',
+  planned: 'Planned',
+  rendering: 'Generating Video',
+  ready: 'Ready',
+  error: 'Failed',
+  // legacy statuses
+  generating_assets: 'Generating Video',
+  code_generating: 'Generating Video',
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  'planned': 'border-gray-200',
-  'generating_assets': 'border-purple-400',
-  'code_generating': 'border-amber-400',
-  'rendering': 'border-blue-400',
-  'ready': 'border-green-500',
-  'error': 'border-red-500',
+  planned: 'border-gray-200',
+  rendering: 'border-blue-400',
+  ready: 'border-green-500',
+  error: 'border-red-500',
+  generating_assets: 'border-purple-400',
+  code_generating: 'border-amber-400',
 };
 
 // Custom Node for Scene
@@ -127,7 +128,7 @@ export default function WorkflowVisualizer() {
         id: `e-${previousNodeId}-${scene.id}`,
         source: previousNodeId,
         target: scene.id,
-        animated: ['code_generating', 'rendering', 'generating_assets'].includes(scene.status),
+        animated: ['rendering', 'code_generating', 'generating_assets'].includes(scene.status),
         style: { stroke: '#9ca3af', strokeWidth: 2 },
         type: 'smoothstep', // Smoothstep looks cleaner for "pipeline" view than bezier often
       });

@@ -62,7 +62,6 @@ class Project(BaseModel):
 
 class SceneStatus(str, Enum):
     PLANNED = "planned"
-    CODE_GENERATING = "code_generating"
     RENDERING = "rendering"
     READY = "ready"
     ERROR = "error"

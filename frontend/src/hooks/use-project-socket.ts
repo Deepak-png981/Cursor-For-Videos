@@ -42,11 +42,12 @@ export function useProjectSocket(projectId: string | null) {
              break;
              
           case "scene_update":
-             // { scene_id, status, code?, video_url? }
+             // { scene_id, status, code?, video_url?, progress_message? }
              updateScene(data.scene_id, {
                status: data.status,
                code: data.code,
-               video_url: data.video_url
+               video_url: data.video_url,
+               progress_message: data.progress_message
              });
              break;
              

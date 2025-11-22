@@ -14,7 +14,8 @@ export interface Scene {
   index: number;
   title: string;
   description: string;
-  status: "planned" | "code_generating" | "rendering" | "ready" | "error";
+  status: "planned" | "code_generating" | "rendering" | "ready" | "error" | "generating_assets";
+  progress_message?: string;
   code?: string;
   video_url?: string;
   thumbnail_url?: string;

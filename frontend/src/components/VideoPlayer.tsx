@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { Play, Pause, SkipForward, SkipBack, Maximize2, Minimize2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,28 +9,44 @@ import { Slider } from '@/components/ui/slider';
 export default function VideoPlayer() {
   const { scenes } = useProjectStore();
   const sortedScenes = [...scenes].sort((a, b) => a.index - b.index);
-  
-  // We assume a standard scene duration if not available (e.g., 5s) for the timeline logic
-  // In a real app, the backend should return `duration` for each rendered scene.
-  // Manim scenes are usually ~duration of the animation.
-  // Let's assume we get it or default to 5s.
-  const getSceneDuration = (scene: any) => scene.duration || 5; 
-
-  const totalDuration = sortedScenes.reduce((acc, s) => acc + (s.status === 'ready' ? getSceneDuration(s) : 0), 0);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [globalTime, setGlobalTime] = useState(0);
+  const [durationMap, setDurationMap] = useState<Record<string, number>>({});
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Update duration map when scenes load or metadata changes
+  const onLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>, sceneId: string) => {
+      const duration = e.currentTarget.duration;
+      if (duration && !isNaN(duration)) {
+          setDurationMap(prev => ({ ...prev, [sceneId]: duration }));
+      }
+  };
+
+  // Helper to get best available duration
+  const getDuration = (scene: any) => {
+      if (durationMap[scene.id]) return durationMap[scene.id];
+      return scene.duration || 10;
+  };
+
+  // Compute total duration reactively based on scenes and durationMap
+  const totalDuration = useMemo(() => {
+      const getDurationLocal = (scene: any) => {
+          if (durationMap[scene.id]) return durationMap[scene.id];
+          return scene.duration || 10;
+      };
+      return sortedScenes.reduce((acc, s) => acc + (s.status === 'ready' ? getDurationLocal(s) : 0), 0);
+  }, [sortedScenes, durationMap]);
   
   // Derived state: Which scene is active at globalTime?
   const getActiveSceneInfo = (time: number) => {
       let accumulated = 0;
       for (const scene of sortedScenes) {
           if (scene.status !== 'ready') continue;
-          const duration = getSceneDuration(scene);
+          const duration = getDuration(scene);
           if (time < accumulated + duration) {
               return { scene, localTime: time - accumulated, startTime: accumulated };
           }
@@ -78,7 +94,7 @@ export default function VideoPlayer() {
 
   const handleEnded = () => {
       if (currentScene) {
-          const duration = getSceneDuration(currentScene);
+          const duration = getDuration(currentScene);
           const nextGlobal = currentSceneStartTime + duration + 0.1; // nudge into next
           if (nextGlobal < totalDuration) {
               setGlobalTime(nextGlobal);
@@ -137,6 +153,7 @@ export default function VideoPlayer() {
                       className="w-full h-full object-contain"
                       onTimeUpdate={handleTimeUpdate}
                       onEnded={handleEnded}
+                      onLoadedMetadata={(e) => onLoadedMetadata(e, currentScene.id)}
                       controls={false}
                       onClick={togglePlay}
                   />
